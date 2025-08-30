@@ -1,0 +1,479 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Registro Presenze Sportivo</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap');
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f3f4f6;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen flex items-center justify-center p-4">
+
+<div id="app" class="w-full max-w-2xl bg-white rounded-xl shadow-lg p-6 sm:p-8">
+    
+    <!-- Home View -->
+    <div id="homeView" class="view">
+        <h1 class="text-3xl font-bold text-center text-gray-800 mb-6">Registro Presenze</h1>
+        <p class="text-center text-lg text-gray-600 mb-6" id="todayMessage"></p>
+        <div id="dayCategoriesList" class="space-y-4"></div>
+        <button id="viewReportBtn" class="w-full mt-6 bg-purple-600 text-white font-medium py-3 rounded-lg shadow-md hover:bg-purple-700 transition-colors">Visualizza Report</button>
+    </div>
+
+    <!-- Courses View -->
+    <div id="coursesView" class="view hidden">
+        <button id="backToDayListBtn" class="text-gray-500 hover:text-gray-700 mb-4 flex items-center">
+            <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path></svg>
+            Indietro
+        </button>
+        <h2 id="dayTitle" class="text-2xl font-bold text-gray-800 mb-6"></h2>
+        <div id="coursesList" class="space-y-4"></div>
+    </div>
+
+    <!-- Attendance View -->
+    <div id="attendanceView" class="view hidden">
+        <button id="backToCoursesBtn" class="text-gray-500 hover:text-gray-700 mb-4 flex items-center">
+            <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path></svg>
+            Indietro
+        </button>
+        <h2 id="courseTitle" class="text-2xl font-bold text-gray-800 mb-2"></h2>
+        <div class="flex flex-col sm:flex-row sm:justify-between items-center mb-4">
+            <div class="flex items-center space-x-2">
+                <span class="text-gray-600 font-medium">Data:</span>
+                <input type="date" id="attendanceDateInput" class="rounded-lg p-2 border border-gray-300">
+            </div>
+            <button id="saveAttendanceBtn" class="bg-green-600 text-white font-medium py-2 px-4 rounded-lg shadow-md hover:bg-green-700 transition-colors mt-2 sm:mt-0">Salva Presenze</button>
+        </div>
+        <div id="studentsList" class="space-y-3"></div>
+    </div>
+
+    <!-- Report View -->
+    <div id="reportView" class="view hidden">
+        <button id="backFromReportBtn" class="text-gray-500 hover:text-gray-700 mb-4 flex items-center">
+            <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path></svg>
+            Indietro
+        </button>
+        <h2 class="text-2xl font-bold text-gray-800 mb-4">Report Totale</h2>
+        <div id="reportTable" class="bg-gray-50 rounded-lg p-4"></div>
+    </div>
+
+    <!-- Firebase Connection Status -->
+    <div id="statusMessage" class="mt-6 text-center text-sm font-medium text-gray-500">
+        <span id="connectionStatus" class="text-yellow-600">Connessione a Firestore...</span>
+    </div>
+</div>
+
+<div id="customModal" class="fixed inset-0 bg-gray-900 bg-opacity-50 flex items-center justify-center p-4 hidden">
+    <div class="bg-white rounded-xl p-6 shadow-xl w-full max-w-sm">
+        <h3 id="modalTitle" class="text-lg font-bold mb-2"></h3>
+        <p id="modalMessage" class="text-sm text-gray-600 mb-4"></p>
+        <div class="flex justify-end space-x-2">
+            <button id="modalCloseBtn" class="bg-gray-200 text-gray-800 font-medium py-2 px-4 rounded-lg hover:bg-gray-300">OK</button>
+        </div>
+    </div>
+</div>
+
+<script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+    import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+    import { getFirestore, doc, getDoc, addDoc, setDoc, updateDoc, onSnapshot, collection, query, where, getDocs, arrayUnion, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+    import { getAnalytics } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-analytics.js";
+
+    // --- Firebase Global Variables (MUST BE USED) ---
+    const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+    const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+    const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : '';
+    // --- End of Firebase Global Variables ---
+
+    let db;
+    let auth;
+    let userId = null;
+    let isAuthReady = false;
+    let currentDayId = null;
+
+    // Data for the app
+    const scheduleData = {
+        'lunedi': {
+            name: 'Lezioni del lunedì',
+            courses: []
+        },
+        'martedi': {
+            name: 'Lezioni del martedì',
+            courses: []
+        },
+        'mercoledi': {
+            name: 'Lezioni del mercoledì',
+            courses: [
+                { id: 'hip-hop-junior', name: 'HIP HOP JUNIOR', students: [] },
+                { id: 'hip-hop-teen', name: 'HIP HOP TEEN', students: [] },
+                { id: 'giocodanza', name: 'GIOCODANZA', students: ['letizia', 'elettra', 'allegra', 'gaia', 'azula', 'crystal'] },
+                { id: 'propedeutica-classica', name: 'PROPEDEUTICA CLASSICA', students: [] },
+                { id: 'ii-grado-classico', name: 'II GRADO - CLASSICO', students: [] }
+            ]
+        },
+        'giovedi': {
+            name: 'Lezioni del giovedì',
+            courses: []
+        },
+        'venerdi': {
+            name: 'Lezioni del venerdì',
+            courses: []
+        },
+        'fuori-programma': {
+            name: 'Lezioni fuori programma',
+            courses: []
+        }
+    };
+
+    let currentCourseId = null;
+
+    // DOM Elements
+    const homeView = document.getElementById('homeView');
+    const coursesView = document.getElementById('coursesView');
+    const attendanceView = document.getElementById('attendanceView');
+    const reportView = document.getElementById('reportView');
+    const dayCategoriesList = document.getElementById('dayCategoriesList');
+    const todayMessageEl = document.getElementById('todayMessage');
+    const coursesListEl = document.getElementById('coursesList');
+    const dayTitleEl = document.getElementById('dayTitle');
+    const backToDayListBtn = document.getElementById('backToDayListBtn');
+    const backToCoursesBtn = document.getElementById('backToCoursesBtn');
+    const courseTitleEl = document.getElementById('courseTitle');
+    const attendanceDateInput = document.getElementById('attendanceDateInput');
+    const studentsListEl = document.getElementById('studentsList');
+    const saveAttendanceBtn = document.getElementById('saveAttendanceBtn');
+    const backFromReportBtn = document.getElementById('backFromReportBtn');
+    const viewReportBtn = document.getElementById('viewReportBtn');
+    const reportTable = document.getElementById('reportTable');
+    const connectionStatusEl = document.getElementById('connectionStatus');
+    const customModal = document.getElementById('customModal');
+    const modalTitleEl = document.getElementById('modalTitle');
+    const modalMessageEl = document.getElementById('modalMessage');
+    const modalCloseBtn = document.getElementById('modalCloseBtn');
+
+    // --- Utility Functions ---
+    const showModal = (title, message) => {
+        modalTitleEl.textContent = title;
+        modalMessageEl.textContent = message;
+        customModal.classList.remove('hidden');
+    };
+
+    const hideModal = () => {
+        customModal.classList.add('hidden');
+    };
+
+    const showView = (viewId) => {
+        const views = document.querySelectorAll('.view');
+        views.forEach(view => view.classList.add('hidden'));
+        document.getElementById(viewId).classList.remove('hidden');
+    };
+
+    const formatDateForId = (date = new Date()) => {
+        const d = new Date(date);
+        const year = d.getFullYear();
+        const month = String(d.getMonth() + 1).padStart(2, '0');
+        const day = String(d.getDate()).padStart(2, '0');
+        return `${year}-${month}-${day}`;
+    };
+
+    const getTodayItalianDay = () => {
+        const weekdays = ['domenica', 'lunedì', 'martedì', 'mercoledì', 'giovedì', 'venerdì', 'sabato'];
+        const today = new Date();
+        return weekdays[today.getDay()];
+    };
+
+    // --- Firebase Initialization ---
+    const initializeFirebase = async () => {
+        try {
+            const app = initializeApp(firebaseConfig);
+            db = getFirestore(app);
+            auth = getAuth(app);
+            getAnalytics(app);
+
+            onAuthStateChanged(auth, async (user) => {
+                if (user) {
+                    userId = user.uid;
+                    isAuthReady = true;
+                    connectionStatusEl.textContent = `Connesso come: ${userId.slice(0, 8)}...`;
+                    renderDayCategories();
+                } else {
+                    try {
+                        if (initialAuthToken) {
+                            await signInWithCustomToken(auth, initialAuthToken);
+                        } else {
+                            await signInAnonymously(auth);
+                        }
+                    } catch (error) {
+                        console.error("Errore nell'autenticazione:", error);
+                        connectionStatusEl.textContent = 'Errore di connessione.';
+                    }
+                }
+            });
+
+        } catch (error) {
+            console.error("Errore nell'inizializzazione di Firebase:", error);
+            connectionStatusEl.textContent = 'Errore di connessione a Firebase.';
+        }
+    };
+
+    // --- Data Handling with Firestore ---
+    const saveData = async (courseId, students, date) => {
+        if (!isAuthReady) {
+            showModal("Errore", "Autenticazione in corso, riprova tra poco.");
+            return;
+        }
+
+        const dateId = formatDateForId(date);
+        const courseRef = doc(db, `artifacts/${appId}/users/${userId}/attendance_records`, courseId);
+
+        try {
+            const allCourses = Object.values(scheduleData).flatMap(day => day.courses);
+            const course = allCourses.find(c => c.id === courseId);
+            const courseName = course ? course.name : 'Unknown Course';
+            
+            const courseSnap = await getDoc(courseRef);
+            if (!courseSnap.exists()) {
+                await setDoc(courseRef, {
+                    courseName: courseName,
+                    sessions: {
+                        [dateId]: students
+                    }
+                });
+            } else {
+                await updateDoc(courseRef, {
+                    [`sessions.${dateId}`]: students
+                });
+            }
+            showModal("Successo", "Presenze salvate correttamente!");
+            // After saving, go back to the courses list for the current day
+            showCoursesView(currentDayId);
+        } catch (error) {
+            console.error("Errore nel salvataggio dei dati: ", error);
+            showModal("Errore", "Si è verificato un problema nel salvataggio dei dati.");
+        }
+    };
+    
+    const loadReport = async () => {
+        if (!isAuthReady) {
+            showModal("Errore", "Autenticazione in corso, riprova tra poco.");
+            return;
+        }
+
+        const attendanceRef = collection(db, `artifacts/${appId}/users/${userId}/attendance_records`);
+        
+        try {
+            const querySnapshot = await getDocs(attendanceRef);
+            const reportData = {};
+
+            querySnapshot.forEach(doc => {
+                const courseData = doc.data();
+                const sessions = courseData.sessions;
+                
+                for (const date in sessions) {
+                    const students = sessions[date];
+                    students.forEach(student => {
+                        if (!reportData[student.name]) {
+                            reportData[student.name] = { presence: 0, absence: 0 };
+                        }
+                        if (student.present) {
+                            reportData[student.name].presence += 1;
+                        } else {
+                            reportData[student.name].absence += 1;
+                        }
+                    });
+                }
+            });
+
+            renderReport(reportData);
+        } catch (error) {
+            console.error("Errore nel caricamento del report: ", error);
+            showModal("Errore", "Si è verificato un problema nel caricamento del report.");
+        }
+    };
+
+    // --- Rendering Functions ---
+    const renderDayCategories = () => {
+        todayMessageEl.textContent = `Oggi è ${getTodayItalianDay()}`;
+        dayCategoriesList.innerHTML = '';
+        Object.keys(scheduleData).forEach(dayId => {
+            const day = scheduleData[dayId];
+            const button = document.createElement('button');
+            button.className = 'w-full bg-blue-500 text-white font-medium py-3 rounded-lg shadow-md hover:bg-blue-600 transition-colors';
+            button.textContent = day.name;
+            button.onclick = () => showCoursesView(dayId);
+            dayCategoriesList.appendChild(button);
+        });
+    };
+    
+    const renderCourses = (dayId) => {
+        coursesListEl.innerHTML = '';
+        const day = scheduleData[dayId];
+        if (day && day.courses.length > 0) {
+            day.courses.forEach(course => {
+                const button = document.createElement('button');
+                button.className = 'w-full bg-blue-500 text-white font-medium py-3 rounded-lg shadow-md hover:bg-blue-600 transition-colors';
+                button.textContent = course.name;
+                button.onclick = () => showAttendanceView(course.id);
+                coursesListEl.appendChild(button);
+            });
+        } else {
+            coursesListEl.innerHTML = `<p class="text-center text-gray-500">Nessun corso in programma.</p>`;
+        }
+    };
+
+    const renderStudents = async (courseId, date) => {
+        studentsListEl.innerHTML = '';
+        const allCourses = Object.values(scheduleData).flatMap(day => day.courses);
+        const course = allCourses.find(c => c.id === courseId);
+        
+        const dateId = formatDateForId(date);
+        let savedAttendance = [];
+
+        if (isAuthReady) {
+            try {
+                const courseRef = doc(db, `artifacts/${appId}/users/${userId}/attendance_records`, courseId);
+                const courseSnap = await getDoc(courseRef);
+                if (courseSnap.exists() && courseSnap.data().sessions && courseSnap.data().sessions[dateId]) {
+                    savedAttendance = courseSnap.data().sessions[dateId];
+                }
+            } catch (error) {
+                console.error("Errore nel recupero delle presenze salvate:", error);
+            }
+        }
+        
+        if (course && course.students.length > 0) {
+            course.students.forEach(studentName => {
+                const studentContainer = document.createElement('div');
+                studentContainer.className = 'flex items-center justify-between p-4 bg-white rounded-lg shadow-sm cursor-pointer hover:bg-gray-50 transition-colors';
+                studentContainer.innerHTML = `
+                    <span class="text-gray-800">${studentName}</span>
+                    <input type="checkbox" class="h-5 w-5 rounded text-blue-600 border-gray-300 focus:ring-blue-500" data-student-name="${studentName}">
+                `;
+                const checkbox = studentContainer.querySelector('input[type="checkbox"]');
+                
+                const isPresent = savedAttendance.some(s => s.name === studentName && s.present);
+                if (isPresent) {
+                    checkbox.checked = true;
+                }
+
+                studentContainer.onclick = () => {
+                    checkbox.checked = !checkbox.checked;
+                };
+                studentsListEl.appendChild(studentContainer);
+            });
+        } else {
+             studentsListEl.innerHTML = `<p class="text-center text-gray-500">Nessun studente per questo corso.</p>`;
+        }
+    };
+
+    const renderReport = (reportData) => {
+        reportTable.innerHTML = '';
+        
+        if (Object.keys(reportData).length === 0) {
+            reportTable.innerHTML = `<p class="text-center text-gray-500">Nessun dato di presenze registrato.</p>`;
+            return;
+        }
+
+        const table = document.createElement('table');
+        table.className = 'min-w-full divide-y divide-gray-200';
+        table.innerHTML = `
+            <thead>
+                <tr>
+                    <th class="px-6 py-3 bg-gray-50 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Studente</th>
+                    <th class="px-6 py-3 bg-gray-50 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Presenze</th>
+                    <th class="px-6 py-3 bg-gray-50 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Assenze</th>
+                </tr>
+            </thead>
+            <tbody id="reportBody" class="bg-white divide-y divide-gray-200"></tbody>
+        `;
+        
+        const reportBody = table.querySelector('#reportBody');
+        for (const studentName in reportData) {
+            const row = document.createElement('tr');
+            row.innerHTML = `
+                <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">${studentName}</td>
+                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${reportData[studentName].presence}</td>
+                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${reportData[studentName].absence}</td>
+            `;
+            reportBody.appendChild(row);
+        }
+        reportTable.appendChild(table);
+    };
+
+    // --- View Handling ---
+    const showCoursesView = (dayId) => {
+        currentDayId = dayId;
+        dayTitleEl.textContent = scheduleData[dayId].name;
+        renderCourses(dayId);
+        showView('coursesView');
+    };
+
+    const showAttendanceView = (courseId) => {
+        currentCourseId = courseId;
+        const allCourses = Object.values(scheduleData).flatMap(day => day.courses);
+        const course = allCourses.find(c => c.id === courseId);
+        if (course) {
+            courseTitleEl.textContent = course.name;
+            attendanceDateInput.value = formatDateForId();
+            renderStudents(courseId, new Date());
+            showView('attendanceView');
+        }
+    };
+
+    const showReportView = () => {
+        loadReport();
+        showView('reportView');
+    };
+
+    // --- Event Listeners ---
+    saveAttendanceBtn.addEventListener('click', () => {
+        const studentCheckboxes = studentsListEl.querySelectorAll('input[type="checkbox"]');
+        const attendanceData = [];
+        studentCheckboxes.forEach(checkbox => {
+            attendanceData.push({
+                name: checkbox.dataset.studentName,
+                present: checkbox.checked
+            });
+        });
+        const selectedDate = new Date(attendanceDateInput.value);
+        saveData(currentCourseId, attendanceData, selectedDate);
+    });
+
+    backToDayListBtn.addEventListener('click', () => {
+        showView('homeView');
+    });
+    
+    backToCoursesBtn.addEventListener('click', () => {
+        showCoursesView(currentDayId);
+    });
+
+    viewReportBtn.addEventListener('click', () => {
+        showReportView();
+    });
+
+    backFromReportBtn.addEventListener('click', () => {
+        showView('homeView');
+    });
+
+    attendanceDateInput.addEventListener('change', (e) => {
+        renderStudents(currentCourseId, new Date(e.target.value));
+    });
+
+    modalCloseBtn.addEventListener('click', () => {
+        hideModal();
+    });
+
+    // --- Initial Call ---
+    document.addEventListener('DOMContentLoaded', () => {
+        showView('homeView');
+        initializeFirebase();
+    });
+
+</script>
+</body>
+</html>
